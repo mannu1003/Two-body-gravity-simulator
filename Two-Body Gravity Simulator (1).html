@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Two-Body Gravity Simulator</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#ffffff;--surface:#f3f5f8;--text:#1b2430;--muted:#5b6675;--line:#d5dae2;--b1:#e8a317;--b2:#2a7f62;--com:#c0392b;--trail1:rgba(232,163,23,.55);--trail2:rgba(42,127,98,.55);--accent:#1f3a5f}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#10151c;--surface:#1a212b;--text:#e8edf3;--muted:#9aa5b4;--line:#2c3644;--b1:#f2b134;--b2:#4fc29b;--com:#ff6b5b;--trail1:rgba(242,177,52,.5);--trail2:rgba(79,194,155,.5);--accent:#8fb4e8}}
+:root[data-theme="dark"]{--bg:#10151c;--surface:#1a212b;--text:#e8edf3;--muted:#9aa5b4;--line:#2c3644;--b1:#f2b134;--b2:#4fc29b;--com:#ff6b5b;--trail1:rgba(242,177,52,.5);--trail2:rgba(79,194,155,.5);--accent:#8fb4e8}
+html,body{margin:0;height:auto;background:var(--bg);color:var(--text);font-family:Arial,Helvetica,sans-serif}
+.wrap{max-width:900px;margin:0 auto;padding:14px 14px 24px}
+h1{font-size:1.25rem;margin:4px 0 2px;color:var(--accent)}
+p.sub{margin:0 0 10px;color:var(--muted);font-size:.85rem}
+canvas{width:100%;display:block;background:var(--surface);border:1px solid var(--line);border-radius:10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px 18px;margin:12px 0}
+label{display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:2px}
+label b{color:var(--accent)}
+input[type=range]{width:100%}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 10px}
+button{background:var(--accent);color:var(--bg);border:0;border-radius:8px;padding:8px 14px;font-size:.85rem;cursor:pointer}
+button.alt{background:var(--surface);color:var(--text);border:1px solid var(--line)}
+.out{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px 18px;font-size:.82rem;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.out span{color:var(--muted)}
+.note{font-size:.78rem;color:var(--muted);margin-top:10px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Two-Body Gravity Simulator</h1>
+<p class="sub">Two masses orbit their common centre of mass (COM) under mutual gravity F = G m<sub>1</sub>m<sub>2</sub>/r².</p>
+<canvas id="c"></canvas>
+<div class="grid">
+ <div><label>Mass m<sub>1</sub> (gold) <b id="m1v"></b></label><input id="m1" type="range" min="1" max="100" step="1" value="30"></div>
+ <div><label>Mass m<sub>2</sub> (green) <b id="m2v"></b></label><input id="m2" type="range" min="1" max="100" step="1" value="10"></div>
+ <div><label>Eccentricity e <b id="ev"></b></label><input id="e" type="range" min="0" max="0.8" step="0.01" value="0.3"></div>
+ <div><label>Simulation speed <b id="sv"></b></label><input id="s" type="range" min="0.2" max="3" step="0.1" value="1"></div>
+</div>
+<div class="btns">
+ <button id="pause">Pause</button>
+ <button class="alt" id="reset">Restart orbit</button>
+ <button class="alt" id="trails">Clear trails</button>
+</div>
+<div class="out" id="out"></div>
+<p class="note">Both bodies are integrated directly from Newton’s law of gravitation (velocity-Verlet). The simulation starts in the COM frame with zero total momentum, so the red COM marker stays fixed while the bodies move about it. Changing a mass restarts the orbit with the same semi-major axis; the heavier body sits closer to the COM, with m<sub>1</sub>r<sub>1</sub> = m<sub>2</sub>r<sub>2</sub>. The period follows T² = 4π²a³/(G(m<sub>1</sub>+m<sub>2</sub>)). Units are arbitrary.</p>
+</div>
+<script>
+(function(){
+var cv=document.getElementById('c'),ctx=cv.getContext('2d');
+var G=40000,A=150; // gravitational constant (arbitrary units), semi-major axis of relative orbit
+var el=function(i){return document.getElementById(i)};
+var S={m1:30,m2:10,e:0.3,speed:1,paused:false};
+var b1,b2,t=0,tr1=[],tr2=[],W=600,H=420,scale=1;
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function resize(){
+  var r=window.devicePixelRatio||1,w=cv.parentElement.clientWidth-28;
+  W=Math.max(280,w);H=Math.round(Math.min(W*0.75,460));
+  cv.width=W*r;cv.height=H*r;cv.style.height=H+'px';ctx.setTransform(r,0,0,r,0,0);
+  scale=Math.min(W,H*1.35)/ (2*A*(1+0.8)+60);
+  scale=Math.min(W/(2*A*(1+S.e)*1.15+40),H/(2*A*1.1*Math.sqrt(1-S.e*S.e)+60)*1.0);
+}
+function init(){
+  var M=S.m1+S.m2,rp=A*(1-S.e),v=Math.sqrt(G*M*(1+S.e)/rp);
+  // relative vector at perihelion along +x, relative velocity along +y; place in COM frame
+  b1={m:S.m1,x:-S.m2/M*rp,y:0,vx:0,vy:-S.m2/M*v};
+  b2={m:S.m2,x: S.m1/M*rp,y:0,vx:0,vy: S.m1/M*v};
+  tr1=[];tr2=[];t=0;resize();
+}
+function acc(){
+  var dx=b2.x-b1.x,dy=b2.y-b1.y,d2=dx*dx+dy*dy,d=Math.sqrt(d2),f=G/(d2*d);
+  b1.ax=f*b2.m*dx;b1.ay=f*b2.m*dy;b2.ax=-f*b1.m*dx;b2.ay=-f*b1.m*dy;
+}
+function step(dt){
+  acc();
+  [b1,b2].forEach(function(b){b.vx+=0.5*dt*b.ax;b.vy+=0.5*dt*b.ay;b.x+=dt*b.vx;b.y+=dt*b.vy});
+  acc();
+  [b1,b2].forEach(function(b){b.vx+=0.5*dt*b.ax;b.vy+=0.5*dt*b.ay});
+  t+=dt;
+}
+function px(x){return W/2+x*scale} function py(y){return H/2-y*scale}
+function rad(m){return 4+3.2*Math.cbrt(m)}
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  var c1=css('--b1'),c2=css('--b2'),cc=css('--com'),mu=css('--muted'),ln=css('--line');
+  // axes cross
+  ctx.strokeStyle=ln;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,H/2);ctx.lineTo(W,H/2);ctx.moveTo(W/2,0);ctx.lineTo(W/2,H);ctx.stroke();
+  [[tr1,css('--trail1')],[tr2,css('--trail2')]].forEach(function(p){
+    ctx.strokeStyle=p[1];ctx.lineWidth=1.6;ctx.beginPath();
+    p[0].forEach(function(q,i){i?ctx.lineTo(px(q[0]),py(q[1])):ctx.moveTo(px(q[0]),py(q[1]))});ctx.stroke();
+  });
+  // line joining bodies passes through COM
+  ctx.strokeStyle=mu;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(px(b1.x),py(b1.y));ctx.lineTo(px(b2.x),py(b2.y));ctx.stroke();ctx.setLineDash([]);
+  // COM marker
+  ctx.strokeStyle=cc;ctx.lineWidth=2;ctx.beginPath();
+  ctx.moveTo(W/2-8,H/2);ctx.lineTo(W/2+8,H/2);ctx.moveTo(W/2,H/2-8);ctx.lineTo(W/2,H/2+8);ctx.stroke();
+  ctx.fillStyle=cc;ctx.font='12px Arial';ctx.fillText('COM',W/2+10,H/2-8);
+  [[b1,c1,'m₁'],[b2,c2,'m₂']].forEach(function(p){
+    ctx.fillStyle=p[1];ctx.beginPath();ctx.arc(px(p[0].x),py(p[0].y),rad(p[0].m),0,6.2832);ctx.fill();
+    ctx.fillStyle=mu;ctx.fillText(p[2],px(p[0].x)+rad(p[0].m)+3,py(p[0].y)-rad(p[0].m));
+  });
+}
+function readout(){
+  var M=S.m1+S.m2,dx=b2.x-b1.x,dy=b2.y-b1.y,d=Math.hypot(dx,dy);
+  var cx=(b1.m*b1.x+b2.m*b2.x)/M,cy=(b1.m*b1.y+b2.m*b2.y)/M;
+  var px_=b1.m*b1.vx+b2.m*b2.vx,py_=b1.m*b1.vy+b2.m*b2.vy;
+  var T=2*Math.PI*Math.sqrt(A*A*A/(G*M));
+  var r1=Math.hypot(b1.x-cx,b1.y-cy),r2=Math.hypot(b2.x-cx,b2.y-cy);
+  var KE=0.5*b1.m*(b1.vx*b1.vx+b1.vy*b1.vy)+0.5*b2.m*(b2.vx*b2.vx+b2.vy*b2.vy),U=-G*b1.m*b2.m/d;
+  var L=b1.m*(b1.x*b1.vy-b1.y*b1.vx)+b2.m*(b2.x*b2.vy-b2.y*b2.vx);
+  el('out').innerHTML=
+   '<div><span>Separation r = </span>'+d.toFixed(1)+'</div>'+
+   '<div><span>r₁ (m₁ to COM) = </span>'+r1.toFixed(1)+'</div>'+
+   '<div><span>r₂ (m₂ to COM) = </span>'+r2.toFixed(1)+'</div>'+
+   '<div><span>m₁r₁ / m₂r₂ = </span>'+(b1.m*r1/(b2.m*r2)).toFixed(3)+'</div>'+
+   '<div><span>COM position = </span>('+cx.toFixed(2)+', '+cy.toFixed(2)+')</div>'+
+   '<div><span>Total momentum = </span>'+Math.hypot(px_,py_).toFixed(2)+'</div>'+
+   '<div><span>Angular momentum L = </span>'+L.toFixed(0)+'</div>'+
+   '<div><span>Total energy E = </span>'+(KE+U).toFixed(0)+'</div>'+
+   '<div><span>Period T = </span>'+T.toFixed(2)+' s</div>'+
+   '<div><span>T² / a³ = </span>'+(T*T/(A*A*A)).toExponential(3)+'</div>'+
+   '<div><span>4π² / G(m₁+m₂) = </span>'+(4*Math.PI*Math.PI/(G*M)).toExponential(3)+'</div>'+
+   '<div><span>Elapsed time = </span>'+t.toFixed(1)+' s ('+(t/T).toFixed(2)+' orbits)</div>';
+}
+function labels(){
+  el('m1v').textContent=S.m1;el('m2v').textContent=S.m2;el('ev').textContent=S.e.toFixed(2);el('sv').textContent=S.speed.toFixed(1)+'×';
+}
+var last=null,cnt=0;
+function frame(ts){
+  if(last===null)last=ts;
+  var dt=Math.min((ts-last)/1000,0.05)*S.speed;last=ts;
+  if(!S.paused){
+    var n=Math.max(1,Math.ceil(dt/0.0015)),h=dt/n;
+    for(var i=0;i<n;i++)step(h);
+    if(++cnt%2===0){tr1.push([b1.x,b1.y]);tr2.push([b2.x,b2.y]);if(tr1.length>1200){tr1.shift();tr2.shift()}}
+  }
+  draw();readout();requestAnimationFrame(frame);
+}
+['m1','m2','e'].forEach(function(id){el(id).addEventListener('input',function(){S[id]=parseFloat(el(id).value);labels();init()})});
+el('s').addEventListener('input',function(){S.speed=parseFloat(el('s').value);labels()});
+el('pause').onclick=function(){S.paused=!S.paused;this.textContent=S.paused?'Resume':'Pause'};
+el('reset').onclick=init;
+el('trails').onclick=function(){tr1=[];tr2=[]};
+window.addEventListener('resize',resize);
+labels();init();requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
